@@ -121,3 +121,8 @@ int main(int argc, char** argv) {
 
     return 0;
 }
+
+// make
+// make test
+// ./test_app ./libcaesar.so 42 input.txt enc.bin
+// ./test_app ./libcaesar.so 42 enc.bin dec.txt
