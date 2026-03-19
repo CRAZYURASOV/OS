@@ -4,6 +4,7 @@
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 typedef void (*set_key_fn)(char);
 typedef void (*caesar_fn)(void*, void*, int);
@@ -28,11 +29,12 @@ int main(int argc, char** argv) {
     const char* out_path = argv[4];
 
     char* endp = NULL;
-    long key_long = strtol(key_str, &endp, 0); // можно "42", "0x2A" и т.п.
+    long key_long = strtol(key_str, &endp, 0);
     if (endp == key_str || *endp != '\0' || key_long < -128 || key_long > 255) {
-        fprintf(stderr, "Invalid key: %s (use number -128..255)\n", key_str);
+        fprintf(stderr, "Invalid key: %s\n", key_str);
         return 2;
     }
+
     char key = (char)key_long;
 
     void* handle = dlopen(so_path, RTLD_NOW);
@@ -41,11 +43,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    dlerror(); // clear
+    dlerror();
     set_key_fn set_key = (set_key_fn)dlsym(handle, "set_key");
     const char* err1 = dlerror();
 
-    dlerror(); // clear
+    dlerror();
     caesar_fn caesar = (caesar_fn)dlsym(handle, "caesar");
     const char* err2 = dlerror();
 
@@ -72,6 +74,7 @@ int main(int argc, char** argv) {
 
     unsigned char* buf_in = (unsigned char*)malloc((size_t)sz);
     unsigned char* buf_out = (unsigned char*)malloc((size_t)sz);
+
     if (!buf_in || !buf_out) {
         fprintf(stderr, "Out of memory\n");
         fclose(in);
