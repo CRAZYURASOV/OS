@@ -1,6 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
 
-#include <dlfcn.h>
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
@@ -11,14 +10,13 @@
 #include <time.h>
 #include <unistd.h>
 
+#include "caesar.h"
+
 #define BUFFER_SIZE 4096
 #define WORKER_COUNT 3
 #define LOCK_TIMEOUT_SEC 5
 
 static volatile sig_atomic_t keep_running = 1;
-
-typedef void (*set_key_fn)(char);
-typedef void (*caesar_fn)(void*, void*, int);
 
 typedef struct {
     char **input_files;
@@ -28,9 +26,6 @@ typedef struct {
     const char *output_dir;
     FILE *log_file;
     pthread_mutex_t mutex;
-
-    void *lib_handle;
-    caesar_fn caesar;
 } shared_state;
 
 typedef struct {
@@ -120,9 +115,8 @@ static void write_log(shared_state *state,
     format_timestamp(timestamp, sizeof(timestamp));
 
     fprintf(state->log_file,
-            "[%s] pid=%ld thread=%d tid=%lu file=%s result=%s time_ms=%ld",
+            "[%s] thread=%d tid=%lu file=%s result=%s time_ms=%ld",
             timestamp,
-            (long)getpid(),
             thread_no,
             (unsigned long)pthread_self(),
             file_name,
@@ -141,7 +135,6 @@ static void write_log(shared_state *state,
 
 static int copy_and_encrypt_file(const char *input_path,
                                  const char *output_dir,
-                                 caesar_fn caesar,
                                  char *errbuf,
                                  size_t errbuf_size) {
     FILE *in = fopen(input_path, "rb");
@@ -243,11 +236,7 @@ static void *worker_thread(void *arg) {
         clock_gettime(CLOCK_MONOTONIC, &start_ts);
 
         char errbuf[256] = {0};
-        int rc = copy_and_encrypt_file(input_path,
-                                       state->output_dir,
-                                       state->caesar,
-                                       errbuf,
-                                       sizeof(errbuf));
+        int rc = copy_and_encrypt_file(input_path, state->output_dir, errbuf, sizeof(errbuf));
 
         clock_gettime(CLOCK_MONOTONIC, &end_ts);
 
@@ -271,29 +260,29 @@ static void *worker_thread(void *arg) {
 }
 
 static void print_usage(const char *prog) {
-    fprintf(stderr,
-            "Использование: %s <path_to_so> <file1> [file2 ...] <output_dir> <key>\n",
-            prog);
+    fprintf(stderr, "Использование: %s <file1> [file2 ...] <output_dir> <key>\n", prog);
 }
 
 int main(int argc, char *argv[]) {
-    if (argc < 5) {
+    if (argc < 4) {
         print_usage(argv[0]);
         return 2;
     }
 
-    const char *so_path = argv[1];
-    int input_count = argc - 4;
-    char **input_files = &argv[2];
+    int input_count = argc - 3;
+    char **input_files = &argv[1];
     const char *output_dir = argv[argc - 2];
     const char *key_str = argv[argc - 1];
 
     char *endp = NULL;
     long key_long = strtol(key_str, &endp, 0);
+
     if (endp == key_str || *endp != '\0' || key_long < -128 || key_long > 255) {
         fprintf(stderr, "Некорректный ключ: %s\n", key_str);
         return 2;
     }
+
+    set_key((char)key_long);
 
     if (ensure_output_dir(output_dir) != 0) {
         return 1;
@@ -305,30 +294,6 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    void *handle = dlopen(so_path, RTLD_NOW);
-    if (!handle) {
-        fprintf(stderr, "dlopen failed: %s\n", dlerror());
-        fclose(log_file);
-        return 1;
-    }
-
-    dlerror();
-    set_key_fn set_key = (set_key_fn)dlsym(handle, "set_key");
-    const char *err1 = dlerror();
-
-    dlerror();
-    caesar_fn caesar = (caesar_fn)dlsym(handle, "caesar");
-    const char *err2 = dlerror();
-
-    if (err1 || err2 || !set_key || !caesar) {
-        fprintf(stderr, "dlsym failed: %s %s\n", err1 ? err1 : "", err2 ? err2 : "");
-        dlclose(handle);
-        fclose(log_file);
-        return 1;
-    }
-
-    set_key((char)key_long);
-
     signal(SIGINT, handle_sigint);
 
     shared_state state;
@@ -338,8 +303,6 @@ int main(int argc, char *argv[]) {
     state.copied_count = 0;
     state.output_dir = output_dir;
     state.log_file = log_file;
-    state.lib_handle = handle;
-    state.caesar = caesar;
     pthread_mutex_init(&state.mutex, NULL);
 
     pthread_t workers[WORKER_COUNT];
@@ -358,7 +321,6 @@ int main(int argc, char *argv[]) {
             }
 
             pthread_mutex_destroy(&state.mutex);
-            dlclose(handle);
             fclose(log_file);
             return 1;
         }
@@ -371,7 +333,6 @@ int main(int argc, char *argv[]) {
     printf("Скопировано файлов: %d из %d\n", state.copied_count, state.total_files);
 
     pthread_mutex_destroy(&state.mutex);
-    dlclose(handle);
     fclose(log_file);
 
     return (state.copied_count == state.total_files) ? 0 : 1;

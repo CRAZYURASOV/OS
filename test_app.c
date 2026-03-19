@@ -9,12 +9,6 @@
 typedef void (*set_key_fn)(char);
 typedef void (*caesar_fn)(void*, void*, int);
 
-#include <dlfcn.h>
-
-void* handle = dlopen(so_path, RTLD_NOW);
-set_key_fn set_key = (set_key_fn)dlsym(handle, "set_key");
-caesar_fn caesar = (caesar_fn)dlsym(handle, "caesar");
-
 static long file_size(FILE* f) {
     if (fseek(f, 0, SEEK_END) != 0) return -1;
     long sz = ftell(f);
